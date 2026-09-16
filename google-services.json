@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "987628060671",
+    "project_id": "farfre",
+    "storage_bucket": "farfre.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:987628060671:android:5b1bae434e940161f571ca",
+        "android_client_info": {
+          "package_name": "com.farfresh"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDVyQSDB46GjC3q3kjvxAY5eNbvBssr4NU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
