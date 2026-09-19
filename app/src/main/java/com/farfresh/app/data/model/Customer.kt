@@ -8,5 +8,6 @@ data class Customer(
     val phone: String? = null,
     val dni: String = "",
     val isActive: Boolean = true,
-    val createdAt: Any? = null // Cambiado a Any para aceptar tanto Long como Timestamp
+    val createdAt: Any? = null,
+    val updatedAt: Long = System.currentTimeMillis()
 )

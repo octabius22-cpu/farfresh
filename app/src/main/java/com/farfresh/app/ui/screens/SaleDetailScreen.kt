@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +27,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import androidx.compose.material.icons.filled.Share
+import com.farfresh.app.data.util.ReceiptUtils
+import kotlinx.coroutines.launch
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SaleDetailScreen(
@@ -33,6 +38,8 @@ fun SaleDetailScreen(
     onBack: () -> Unit,
     viewModel: PendingViewModel = viewModel()
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
     val customerRepository = CustomerRepository()
     val allSales by SaleRepository.getSales().collectAsStateWithLifecycle(emptyList())
     val allCustomers by customerRepository.getCustomers().collectAsStateWithLifecycle(emptyList())
@@ -43,7 +50,14 @@ fun SaleDetailScreen(
     val payments by viewModel.getPaymentsForSale(saleId).collectAsStateWithLifecycle(emptyList())
     
     var showPaymentDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
     val dateFormat = SimpleDateFormat("dd/MM/yyyy h:mm a", Locale.getDefault())
+
+    LaunchedEffect(viewModel.saleMessage) {
+        viewModel.saleMessage?.let {
+            // Notificar éxito/error
+        }
+    }
 
     if (sale == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -59,6 +73,23 @@ fun SaleDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Regresar")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = {
+                        scope.launch {
+                            ReceiptUtils.generateAndShareReceipt(
+                                context,
+                                sale,
+                                items,
+                                customer?.name ?: "Consumidor general"
+                            )
+                        }
+                    }) {
+                        Icon(Icons.Default.Share, contentDescription = "Compartir recibo")
+                    }
+                    IconButton(onClick = { showDeleteDialog = true }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Eliminar venta", tint = MaterialTheme.colorScheme.error)
                     }
                 }
             )
@@ -152,6 +183,30 @@ fun SaleDetailScreen(
                 }
             }
         }
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("¿Eliminar venta?") },
+            text = { Text("Esta acción es permanente. El stock de los productos vendidos se restaurará automáticamente.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.deleteSale(saleId, onSuccess = onBack)
+                        showDeleteDialog = false
+                    },
+                    colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("ELIMINAR")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
     }
 
     if (showPaymentDialog) {

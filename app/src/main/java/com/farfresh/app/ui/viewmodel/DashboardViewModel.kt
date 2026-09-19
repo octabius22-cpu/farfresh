@@ -10,11 +10,20 @@ import java.util.*
 
 class DashboardViewModel : ViewModel() {
 
+    private val todayStart: Long
+        get() = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
     val uiState: StateFlow<DashboardUiState> = combine(
-        SaleRepository.getSales(),
-        SaleRepository.getPayments()
-    ) { sales, payments ->
-        calculateDashboardState(sales, payments)
+        SaleRepository.getSales(limit = 50, startTime = todayStart),
+        SaleRepository.getPendingSales(),
+        SaleRepository.getPayments(limit = 100) // Solo pagos recientes para el dash
+    ) { todaySales, pendingSales, recentPayments ->
+        calculateDashboardState(todaySales, pendingSales, recentPayments)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
@@ -22,30 +31,30 @@ class DashboardViewModel : ViewModel() {
     )
 
     private fun calculateDashboardState(
-        sales: List<Sale>,
-        payments: List<Payment>
+        todaySales: List<Sale>,
+        pendingSales: List<Sale>,
+        recentPayments: List<Payment>
     ): DashboardUiState {
         val today = Calendar.getInstance()
         
-        val salesToday = sales.filter { isSameDay(it.timestamp, today) }
-        val paymentsToday = payments.filter { isSameDay(it.timestamp, today) }
+        // Pagos de hoy reales (filtrados de los recientes)
+        val paymentsToday = recentPayments.filter { isSameDay(it.timestamp, today) }
 
-        val dailyVentas = salesToday.sumOf { it.totalAmount }
-        val dailyProfit = salesToday.sumOf { it.totalProfit }
+        val dailyVentas = todaySales.sumOf { it.totalAmount }
+        val dailyProfit = todaySales.sumOf { it.totalProfit }
         
         val dailyCobrado = paymentsToday.sumOf { it.amount }
-        val totalPendiente = sales.sumOf { it.pendingBalance }
+        val totalPendiente = pendingSales.sumOf { it.pendingBalance }
 
         val cashToday = paymentsToday.filter { it.paymentMethod == PaymentMethod.EFECTIVO }.sumOf { it.amount }
         val yapeToday = paymentsToday.filter { it.paymentMethod == PaymentMethod.YAPE }.sumOf { it.amount }
         val otherToday = paymentsToday.filter { it.paymentMethod == PaymentMethod.OTRO }.sumOf { it.amount }
 
-        val latestSales = sales.sortedByDescending { it.timestamp }.take(5).map { sale ->
+        val latestSales = todaySales.take(5).map { sale ->
             SaleDisplayItem(sale, sale.customerName ?: "Consumidor general")
         }
 
-        val recentPending = sales.filter { it.pendingBalance > 0 }
-            .sortedByDescending { it.timestamp }
+        val recentPending = pendingSales.sortedByDescending { it.timestamp }
             .take(3)
             .map { sale ->
                 PendingDisplayItem(sale.id, sale.customerName ?: "Desconocido", sale.pendingBalance)
@@ -61,7 +70,7 @@ class DashboardViewModel : ViewModel() {
             otherToday = otherToday,
             latestSales = latestSales,
             recentPending = recentPending,
-            hasSales = sales.isNotEmpty()
+            hasSales = todaySales.isNotEmpty() || pendingSales.isNotEmpty()
         )
     }
 

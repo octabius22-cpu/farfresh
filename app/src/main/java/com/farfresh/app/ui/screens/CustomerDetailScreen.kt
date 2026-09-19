@@ -15,9 +15,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material.icons.filled.Share
 import com.farfresh.app.data.model.Customer
+import com.farfresh.app.data.model.Sale
 import com.farfresh.app.data.model.SaleStatus
+import com.farfresh.app.data.util.ReceiptUtils
 import com.farfresh.app.ui.viewmodel.CustomerViewModel
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -30,6 +34,8 @@ fun CustomerDetailScreen(
     onSaleClick: (String) -> Unit,
     viewModel: CustomerViewModel = viewModel()
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
     val customerRepository = com.farfresh.app.data.repository.CustomerRepository()
     var customer by remember { mutableStateOf<Customer?>(null) }
     
@@ -39,6 +45,9 @@ fun CustomerDetailScreen(
 
     val sales by viewModel.getCustomerSales(customerId).collectAsStateWithLifecycle(emptyList())
     val totalPending by viewModel.getCustomerPendingBalance(customerId).collectAsStateWithLifecycle(0.0)
+
+    val pendingSales = remember(sales) { sales.filter { it.pendingBalance > 0 } }
+    val pendingItems by viewModel.getItemsForMultipleSales(pendingSales.map { it.id }).collectAsStateWithLifecycle(emptyList())
 
     val dateFormat = SimpleDateFormat("dd/MM/yyyy h:mm a", Locale.getDefault())
 
@@ -58,6 +67,22 @@ fun CustomerDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Regresar")
+                    }
+                },
+                actions = {
+                    if (totalPending > 0) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                ReceiptUtils.generateAndShareStatement(
+                                    context,
+                                    currentCustomer.name,
+                                    pendingSales,
+                                    pendingItems
+                                )
+                            }
+                        }) {
+                            Icon(Icons.Default.Share, contentDescription = "Compartir Estado de Cuenta", tint = MaterialTheme.colorScheme.primary)
+                        }
                     }
                 }
             )
@@ -84,13 +109,20 @@ fun CustomerDetailScreen(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text("Total pendiente", style = MaterialTheme.typography.labelLarge)
+                        Text("DEUDA TOTAL ACUMULADA", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                         Text(
                             "S/ ${String.format("%.2f", totalPending)}",
                             style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Black,
                             color = MaterialTheme.colorScheme.error
                         )
+                        if (pendingSales.isNotEmpty()) {
+                            Text(
+                                "* Suma de ${pendingSales.size} ventas por cobrar.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
                     }
                 }
             }

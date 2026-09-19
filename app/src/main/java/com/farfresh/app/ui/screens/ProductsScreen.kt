@@ -32,6 +32,10 @@ import com.farfresh.app.data.model.Product
 import com.farfresh.app.data.model.StockMovementType
 import com.farfresh.app.ui.viewmodel.InventoryViewModel
 import com.farfresh.app.ui.viewmodel.ProductsViewModel
+import kotlinx.coroutines.launch
+
+import androidx.compose.material.icons.filled.Share
+import com.farfresh.app.data.util.CatalogUtils
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,6 +46,8 @@ fun ProductsScreen(
     productsViewModel: ProductsViewModel = viewModel(),
     inventoryViewModel: InventoryViewModel = viewModel()
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
     val products by productsViewModel.products.collectAsStateWithLifecycle()
     
     var selectedProductForAction by remember { mutableStateOf<Pair<Product, StockMovementType>?>(null) }
@@ -61,6 +67,13 @@ fun ProductsScreen(
             TopAppBar(
                 title = { Text("Productos", fontWeight = FontWeight.Black) },
                 actions = {
+                    IconButton(onClick = { 
+                        scope.launch {
+                            CatalogUtils.generateAndShareCatalog(context, products)
+                        }
+                    }) {
+                        Icon(Icons.Default.Share, contentDescription = "Compartir catálogo")
+                    }
                     IconButton(onClick = { onHistoryClick(null) }) {
                         Icon(Icons.Default.History, contentDescription = "Historial completo")
                     }
@@ -90,6 +103,16 @@ fun ProductsScreen(
 
             val filteredProducts = products.filter {
                 it.name.contains(productsViewModel.searchQuery, ignoreCase = true)
+            }
+
+            if (productsViewModel.isSyncing && products.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Sincronizando productos...", color = Color.Gray)
+                    }
+                }
             }
 
             LazyColumn(
@@ -164,14 +187,9 @@ fun ProductCard(
                         .clip(RoundedCornerShape(8.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentScale = ContentScale.Crop,
-                    loading = {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        }
-                    },
                     error = {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Error, contentDescription = null, tint = Color.LightGray)
+                            Icon(Icons.Default.Image, contentDescription = null, tint = Color.LightGray)
                         }
                     }
                 )

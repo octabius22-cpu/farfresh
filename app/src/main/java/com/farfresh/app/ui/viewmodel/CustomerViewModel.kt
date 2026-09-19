@@ -3,24 +3,43 @@ package com.farfresh.app.ui.viewmodel
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.farfresh.app.data.model.Customer
-import com.farfresh.app.data.model.Sale
+import com.farfresh.app.data.model.*
 import com.farfresh.app.data.repository.CustomerRepository
 import com.farfresh.app.data.repository.SaleRepository
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.util.UUID
 
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 class CustomerViewModel : ViewModel() {
 
     private val customerRepository = CustomerRepository()
     
-    // Eliminamos la carga masiva de clientes para evitar crasheos de memoria
-    // val customers = customerRepository.getCustomers()...
+    init {
+        // Sincronización incremental al iniciar
+        viewModelScope.launch {
+            customerRepository.syncCustomers()
+        }
+    }
 
     var searchQuery by mutableStateOf("")
+    
+    // Búsqueda en tiempo real sobre Room (0 lecturas Firestore)
+    val customers = snapshotFlow { searchQuery }
+        .debounce(300)
+        .flatMapLatest { query ->
+            if (query.length >= 3) {
+                customerRepository.searchCustomers(query)
+            } else {
+                flowOf(emptyList())
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
     var foundCustomer by mutableStateOf<Customer?>(null)
     var isSearching by mutableStateOf(false)
     var customerMessage by mutableStateOf<String?>(null)
@@ -83,6 +102,12 @@ class CustomerViewModel : ViewModel() {
     fun getCustomerPendingBalance(customerId: String): Flow<Double> {
         return getCustomerSales(customerId).map { sales ->
             sales.sumOf { it.pendingBalance }
+        }
+    }
+
+    fun getItemsForMultipleSales(saleIds: List<String>): Flow<List<SaleItem>> {
+        return SaleRepository.getSaleItems().map { items ->
+            items.filter { it.saleId in saleIds }
         }
     }
 }

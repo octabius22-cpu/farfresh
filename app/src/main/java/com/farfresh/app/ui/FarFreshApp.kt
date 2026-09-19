@@ -63,7 +63,7 @@ fun FarFreshApp() {
         ) { innerPadding ->
             FarFreshNavGraph(
                 navController = navController,
-                modifier = Modifier.padding(innerPadding)
+                modifier = Modifier.padding(bottom = innerPadding.calculateBottomPadding())
             )
         }
     }

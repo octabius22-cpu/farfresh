@@ -8,6 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.farfresh.app.data.model.*
 import com.farfresh.app.data.repository.*
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import java.util.*
 
@@ -33,56 +34,49 @@ class ReportViewModel : ViewModel() {
         val stockMovements: List<StockMovement>
     )
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     val reportState: StateFlow<ReportUiState> = combine(
-        SaleRepository.getSales(),
-        SaleRepository.getPayments(),
-        SaleRepository.getSaleItems(),
-        productRepository.getProducts(),
-        customerRepository.getCustomers(),
-        stockRepository.getMovements(),
         snapshotFlow { selectedPeriod },
         snapshotFlow { startDate },
         snapshotFlow { endDate }
-    ) { args: Array<Any> ->
-        @Suppress("UNCHECKED_CAST")
-        val sales = args[0] as List<Sale>
-        @Suppress("UNCHECKED_CAST")
-        val payments = args[1] as List<Payment>
-        @Suppress("UNCHECKED_CAST")
-        val saleItems = args[2] as List<SaleItem>
-        @Suppress("UNCHECKED_CAST")
-        val products = args[3] as List<Product>
-        @Suppress("UNCHECKED_CAST")
-        val customers = args[4] as List<Customer>
-        @Suppress("UNCHECKED_CAST")
-        val stockMovements = args[5] as List<StockMovement>
-        val period = args[6] as ReportPeriod
-        val startD = args[7] as Long
-        val endD = args[8] as Long
-
-        val data = CombinedData(sales, payments, saleItems, products, customers, stockMovements)
-        calculateReport(data, period, startD, endD)
+    ) { period, start, end ->
+        getRangeForPeriod(period, start, end)
+    }.flatMapLatest { range ->
+        combine(
+            SaleRepository.getSalesByRange(range.first, range.second),
+            SaleRepository.getPaymentsByRange(range.first, range.second),
+            SaleRepository.getSaleItemsByRange(range.first, range.second),
+            productRepository.getProducts(),
+            customerRepository.getCustomers(),
+            stockRepository.getMovements()
+        ) { args: Array<Any> ->
+            @Suppress("UNCHECKED_CAST")
+            val data = CombinedData(
+                sales = args[0] as List<Sale>,
+                payments = args[1] as List<Payment>,
+                saleItems = args[2] as List<SaleItem>,
+                products = args[3] as List<Product>,
+                customers = args[4] as List<Customer>,
+                stockMovements = args[5] as List<StockMovement>
+            )
+            calculateReport(data, range.first, range.second)
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ReportUiState())
 
-    private fun calculateReport(data: CombinedData, period: ReportPeriod, customStart: Long, customEnd: Long): ReportUiState {
-        val (start, end) = getRangeForPeriod(period, customStart, customEnd)
-        
-        val salesInPeriod = data.sales.filter { it.timestamp in start..end }
-        val paymentsInPeriod = data.payments.filter { it.timestamp in start..end }
+    private fun calculateReport(data: CombinedData, start: Long, end: Long): ReportUiState {
+        val salesInPeriod = data.sales
+        val paymentsInPeriod = data.payments
         val stockMovementsInPeriod = data.stockMovements.filter { it.timestamp in start..end }
         
-        // Resumen General
         val totalVentas = salesInPeriod.sumOf { it.totalAmount }
         val totalCobrado = paymentsInPeriod.sumOf { it.amount }
         val totalGanancia = salesInPeriod.sumOf { it.totalProfit }
         val porCobrarPeriodo = salesInPeriod.sumOf { it.pendingBalance }
 
-        // Métodos de Pago
         val efectivo = paymentsInPeriod.filter { it.paymentMethod == PaymentMethod.EFECTIVO }.sumOf { it.amount }
         val yape = paymentsInPeriod.filter { it.paymentMethod == PaymentMethod.YAPE }.sumOf { it.amount }
         val otros = paymentsInPeriod.filter { it.paymentMethod == PaymentMethod.OTRO }.sumOf { it.amount }
 
-        // Productos más vendidos
         val itemsInPeriod = data.saleItems.filter { item -> salesInPeriod.any { it.id == item.saleId } }
         val topSoldProducts = itemsInPeriod.groupBy { it.productId }
             .map { (id, items) ->
@@ -98,18 +92,15 @@ class ReportViewModel : ViewModel() {
 
         val topProfitProducts = topSoldProducts.sortedByDescending { it.profit }
 
-        // Inventario
         val activeProducts = data.products.count { it.isActive }
         val lowStock = data.products.count { it.isActive && it.stock > 0 && it.stock <= 10 }
         val noStock = data.products.count { it.isActive && it.stock <= 0 }
         val totalUnits = data.products.sumOf { it.stock }
 
-        // Movimientos
         val entries = stockMovementsInPeriod.count { it.type == StockMovementType.ENTRADA }
         val exits = stockMovementsInPeriod.count { it.type == StockMovementType.SALIDA }
         val adjustments = stockMovementsInPeriod.count { it.type == StockMovementType.AJUSTE }
 
-        // Clientes
         val totalCustomers = data.customers.size
         val debtorCount = data.customers.count { customer -> 
             data.sales.any { it.customerId == customer.id && it.pendingBalance > 0 }
@@ -144,65 +135,46 @@ class ReportViewModel : ViewModel() {
 
     private fun getRangeForPeriod(period: ReportPeriod, customStart: Long, customEnd: Long): Pair<Long, Long> {
         val cal = Calendar.getInstance()
-        val now = cal.timeInMillis
-        
         return when (period) {
             ReportPeriod.HOY -> {
-                cal.set(Calendar.HOUR_OF_DAY, 0)
-                cal.set(Calendar.MINUTE, 0)
-                cal.set(Calendar.SECOND, 0)
-                val start = cal.timeInMillis
-                cal.set(Calendar.HOUR_OF_DAY, 23)
-                cal.set(Calendar.MINUTE, 59)
-                cal.set(Calendar.SECOND, 59)
-                start to cal.timeInMillis
+                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0)
+                val s = cal.timeInMillis
+                cal.set(Calendar.HOUR_OF_DAY, 23); cal.set(Calendar.MINUTE, 59); cal.set(Calendar.SECOND, 59)
+                s to cal.timeInMillis
             }
             ReportPeriod.AYER -> {
                 cal.add(Calendar.DAY_OF_YEAR, -1)
-                cal.set(Calendar.HOUR_OF_DAY, 0)
-                cal.set(Calendar.MINUTE, 0)
-                cal.set(Calendar.SECOND, 0)
-                val start = cal.timeInMillis
-                cal.set(Calendar.HOUR_OF_DAY, 23)
-                cal.set(Calendar.MINUTE, 59)
-                cal.set(Calendar.SECOND, 59)
-                start to cal.timeInMillis
+                cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0); cal.set(Calendar.SECOND, 0)
+                val s = cal.timeInMillis
+                cal.set(Calendar.HOUR_OF_DAY, 23); cal.set(Calendar.MINUTE, 59); cal.set(Calendar.SECOND, 59)
+                s to cal.timeInMillis
             }
             ReportPeriod.ESTA_SEMANA -> {
                 cal.set(Calendar.DAY_OF_WEEK, cal.firstDayOfWeek)
                 cal.set(Calendar.HOUR_OF_DAY, 0)
-                val start = cal.timeInMillis
+                val s = cal.timeInMillis
                 cal.add(Calendar.DAY_OF_YEAR, 6)
                 cal.set(Calendar.HOUR_OF_DAY, 23)
-                start to cal.timeInMillis
+                s to cal.timeInMillis
             }
             ReportPeriod.ESTE_MES -> {
-                cal.set(Calendar.DAY_OF_MONTH, 1)
-                cal.set(Calendar.HOUR_OF_DAY, 0)
-                val start = cal.timeInMillis
+                cal.set(Calendar.DAY_OF_MONTH, 1); cal.set(Calendar.HOUR_OF_DAY, 0)
+                val s = cal.timeInMillis
                 cal.set(Calendar.DAY_OF_MONTH, cal.getActualMaximum(Calendar.DAY_OF_MONTH))
                 cal.set(Calendar.HOUR_OF_DAY, 23)
-                start to cal.timeInMillis
+                s to cal.timeInMillis
             }
             ReportPeriod.MES_ANTERIOR -> {
                 cal.add(Calendar.MONTH, -1)
-                cal.set(Calendar.DAY_OF_MONTH, 1)
-                cal.set(Calendar.HOUR_OF_DAY, 0)
-                val start = cal.timeInMillis
+                cal.set(Calendar.DAY_OF_MONTH, 1); cal.set(Calendar.HOUR_OF_DAY, 0)
+                val s = cal.timeInMillis
                 cal.set(Calendar.DAY_OF_MONTH, cal.getActualMaximum(Calendar.DAY_OF_MONTH))
                 cal.set(Calendar.HOUR_OF_DAY, 23)
-                start to cal.timeInMillis
+                s to cal.timeInMillis
             }
             ReportPeriod.PERSONALIZADO -> {
-                val s = Calendar.getInstance().apply { 
-                    timeInMillis = customStart
-                    set(Calendar.HOUR_OF_DAY, 0)
-                }.timeInMillis
-                val e = Calendar.getInstance().apply {
-                    timeInMillis = customEnd
-                    set(Calendar.HOUR_OF_DAY, 23)
-                    set(Calendar.MINUTE, 59)
-                }.timeInMillis
+                val s = Calendar.getInstance().apply { timeInMillis = customStart; set(Calendar.HOUR_OF_DAY, 0) }.timeInMillis
+                val e = Calendar.getInstance().apply { timeInMillis = customEnd; set(Calendar.HOUR_OF_DAY, 23) }.timeInMillis
                 s to e
             }
         }

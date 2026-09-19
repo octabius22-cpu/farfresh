@@ -28,7 +28,12 @@ fun StockHistoryScreen(
     onBack: () -> Unit,
     viewModel: InventoryViewModel = viewModel()
 ) {
-    val movements by viewModel.getMovements(productId).collectAsStateWithLifecycle()
+    // Sincronizar el productId con el ViewModel
+    LaunchedEffect(productId) {
+        viewModel.setProductId(productId)
+    }
+
+    val movements by viewModel.movements.collectAsStateWithLifecycle()
     val dateFormat = SimpleDateFormat("dd/MM/yyyy h:mm a", Locale.getDefault())
     
     var filterType by remember { mutableStateOf<StockMovementType?>(null) }
@@ -60,7 +65,11 @@ fun StockHistoryScreen(
             )
         }
     ) { padding ->
-        if (movements.isEmpty()) {
+        if (viewModel.isLoadingMovements) {
+            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else if (movements.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 Text("No hay movimientos registrados", color = Color.Gray)
             }

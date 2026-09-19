@@ -14,8 +14,17 @@ import kotlinx.coroutines.launch
 class ProductsViewModel : ViewModel() {
     private val productRepository = ProductRepository()
 
+    var isSyncing by mutableStateOf(false)
     var searchQuery by mutableStateOf("")
     var productMessage by mutableStateOf<String?>(null)
+
+    init {
+        viewModelScope.launch {
+            isSyncing = true
+            productRepository.syncProducts()
+            isSyncing = false
+        }
+    }
 
     val products = productRepository.getProducts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

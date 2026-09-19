@@ -16,8 +16,8 @@ class StockRepository {
     private val movementsCollection = firestore.collection("stockMovements")
     private val productsCollection = firestore.collection("products")
 
-    fun getMovements(productId: String? = null): Flow<List<StockMovement>> = callbackFlow {
-        var query: Query = movementsCollection.orderBy("timestamp", Query.Direction.DESCENDING)
+    fun getMovements(productId: String? = null, limit: Int = 100): Flow<List<StockMovement>> = callbackFlow {
+        var query: Query = movementsCollection.orderBy("timestamp", Query.Direction.DESCENDING).limit(limit.toLong())
         
         if (productId != null) {
             query = query.whereEqualTo("productId", productId)

@@ -19,11 +19,10 @@ class PendingViewModel : ViewModel() {
     var saleMessage by mutableStateOf<String?>(null)
 
     val pendingSales = combine(
-        SaleRepository.getSales(),
+        SaleRepository.getPendingSales(),
         snapshotFlow { searchQuery }
     ) { sales, query ->
-        sales.filter { it.pendingBalance > 0 }
-            .map { sale ->
+        sales.map { sale ->
                 PendingSaleItem(sale, sale.customerName ?: "Consumidor general")
             }
             .filter { item ->
@@ -59,6 +58,18 @@ class PendingViewModel : ViewModel() {
                 saleMessage = "Pago registrado con éxito"
             } catch (e: Exception) {
                 saleMessage = "Error: ${e.message}"
+            }
+        }
+    }
+
+    fun deleteSale(saleId: String, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                SaleRepository.deleteSale(saleId)
+                saleMessage = "Venta eliminada y stock restaurado"
+                onSuccess()
+            } catch (e: Exception) {
+                saleMessage = "Error al eliminar: ${e.message}"
             }
         }
     }

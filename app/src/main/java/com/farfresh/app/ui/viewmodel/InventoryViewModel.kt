@@ -8,9 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.farfresh.app.data.model.StockMovement
 import com.farfresh.app.data.model.StockMovementType
 import com.farfresh.app.data.repository.StockRepository
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 class InventoryViewModel : ViewModel() {
@@ -18,10 +16,20 @@ class InventoryViewModel : ViewModel() {
 
     var inventoryMessage by mutableStateOf<String?>(null)
     var isProcessing by mutableStateOf(false)
+    var isLoadingMovements by mutableStateOf(false)
 
-    fun getMovements(productId: String? = null): StateFlow<List<StockMovement>> {
-        return stockRepository.getMovements(productId)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _currentProductId = MutableStateFlow<String?>(null)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val movements: StateFlow<List<StockMovement>> = _currentProductId.flatMapLatest { id ->
+        isLoadingMovements = true
+        stockRepository.getMovements(id).onEach { 
+            isLoadingMovements = false 
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun setProductId(productId: String?) {
+        _currentProductId.value = productId
     }
 
     fun registerMovement(

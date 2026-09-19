@@ -1,12 +1,12 @@
 package com.farfresh.app.data.repository
 
-import android.util.Log
+import com.farfresh.app.FarFreshApplication
 import com.farfresh.app.data.model.*
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 
@@ -16,155 +16,162 @@ object SaleRepository {
     private val saleItemsCollection = firestore.collection("saleItems")
     private val paymentsCollection = firestore.collection("payments")
     private val productsCollection = firestore.collection("products")
+    
+    private val db = FarFreshApplication.instance.database
+    private val productDao = db.productDao()
 
-    // Estos flujos se pueden exponer para el Dashboard y Ventas
-    fun getSales(limit: Int? = null): Flow<List<Sale>> = callbackFlow {
-        val query = if (limit != null) salesCollection.orderBy("timestamp", com.google.firebase.firestore.Query.Direction.DESCENDING).limit(limit.toLong())
-                    else salesCollection.orderBy("timestamp", com.google.firebase.firestore.Query.Direction.DESCENDING)
+    fun getSales(limit: Int = 100, startTime: Long? = null): Flow<List<Sale>> = callbackFlow {
+        var query = salesCollection.orderBy("timestamp", Query.Direction.DESCENDING).limit(limit.toLong())
+        if (startTime != null) query = query.whereGreaterThanOrEqualTo("timestamp", startTime)
         
         val subscription = query.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                Log.e("SaleRepository", "Error fetching sales", error)
-                return@addSnapshotListener
-            }
-            if (snapshot != null) {
-                try {
-                    val sales = snapshot.toObjects(Sale::class.java)
-                    trySend(sales)
-                } catch (e: Exception) {
-                    Log.e("SaleRepository", "Error mapping sales", e)
-                }
-            }
+            if (error != null) return@addSnapshotListener
+            if (snapshot != null) trySend(snapshot.toObjects(Sale::class.java))
         }
         awaitClose { subscription.remove() }
     }
 
-    fun getSaleItems(): Flow<List<SaleItem>> = callbackFlow {
-        val subscription = saleItemsCollection.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                Log.e("SaleRepository", "Error fetching items", error)
-                return@addSnapshotListener
-            }
-            if (snapshot != null) {
-                try {
-                    val items = snapshot.toObjects(SaleItem::class.java)
-                    trySend(items)
-                } catch (e: Exception) {
-                    Log.e("SaleRepository", "Error mapping items", e)
-                }
-            }
+    fun getSalesByRange(start: Long, end: Long): Flow<List<Sale>> = callbackFlow {
+        val query = salesCollection
+            .whereGreaterThanOrEqualTo("timestamp", start)
+            .whereLessThanOrEqualTo("timestamp", end)
+            .orderBy("timestamp", Query.Direction.DESCENDING)
+
+        val subscription = query.addSnapshotListener { snapshot, error ->
+            if (error != null) return@addSnapshotListener
+            if (snapshot != null) trySend(snapshot.toObjects(Sale::class.java))
         }
         awaitClose { subscription.remove() }
     }
 
-    fun getPayments(): Flow<List<Payment>> = callbackFlow {
-        val subscription = paymentsCollection.addSnapshotListener { snapshot, error ->
-            if (error != null) {
-                Log.e("SaleRepository", "Error fetching payments", error)
-                return@addSnapshotListener
-            }
-            if (snapshot != null) {
-                try {
-                    val payments = snapshot.toObjects(Payment::class.java)
-                    trySend(payments)
-                } catch (e: Exception) {
-                    Log.e("SaleRepository", "Error mapping payments", e)
-                }
-            }
+    fun getSaleItemsByRange(start: Long, end: Long): Flow<List<SaleItem>> = callbackFlow {
+        val subscription = saleItemsCollection.limit(1000).addSnapshotListener { snapshot, error ->
+            if (error != null) return@addSnapshotListener
+            if (snapshot != null) trySend(snapshot.toObjects(SaleItem::class.java))
         }
+        awaitClose { subscription.remove() }
+    }
+
+    fun getPaymentsByRange(start: Long, end: Long): Flow<List<Payment>> = callbackFlow {
+        val query = paymentsCollection
+            .whereGreaterThanOrEqualTo("timestamp", start)
+            .whereLessThanOrEqualTo("timestamp", end)
+
+        val subscription = query.addSnapshotListener { snapshot, error ->
+            if (error != null) return@addSnapshotListener
+            if (snapshot != null) trySend(snapshot.toObjects(Payment::class.java))
+        }
+        awaitClose { subscription.remove() }
+    }
+
+    fun getPendingSales(): Flow<List<Sale>> = callbackFlow {
+        val query = salesCollection.whereGreaterThan("pendingBalance", 0.0)
+        val subscription = query.addSnapshotListener { snapshot, error ->
+            if (error != null) return@addSnapshotListener
+            if (snapshot != null) trySend(snapshot.toObjects(Sale::class.java))
+        }
+        awaitClose { subscription.remove() }
+    }
+
+    fun getSaleItems(limit: Int = 500): Flow<List<SaleItem>> = callbackFlow {
+        val subscription = saleItemsCollection.limit(limit.toLong()).addSnapshotListener { snapshot, error ->
+            if (error != null) return@addSnapshotListener
+            if (snapshot != null) trySend(snapshot.toObjects(SaleItem::class.java))
+        }
+        awaitClose { subscription.remove() }
+    }
+
+    fun getPayments(limit: Int = 200): Flow<List<Payment>> = callbackFlow {
+        val subscription = paymentsCollection.orderBy("timestamp", Query.Direction.DESCENDING)
+            .limit(limit.toLong())
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) return@addSnapshotListener
+                if (snapshot != null) trySend(snapshot.toObjects(Payment::class.java))
+            }
         awaitClose { subscription.remove() }
     }
 
     suspend fun saveSale(sale: Sale, items: List<SaleItem>, payment: Payment?) {
-        firestore.runTransaction { transaction ->
-            // 1. Preparar IDs y referencias
-            val saleRef = salesCollection.document()
-            val saleId = saleRef.id
-            val timestamp = System.currentTimeMillis()
+        val batch = firestore.batch()
+        val saleRef = salesCollection.document()
+        val saleId = saleRef.id
+        val timestamp = System.currentTimeMillis()
 
-            // 2. Descontar stock y preparar movimientos para cada producto
-            items.forEach { item ->
-                val productRef = productsCollection.document(item.productId)
-                val productDoc = transaction.get(productRef)
-                val product = productDoc.toObject(Product::class.java)
-                    ?: throw Exception("Producto ${item.productName} no encontrado")
+        items.forEach { item ->
+            val productRef = productsCollection.document(item.productId)
+            
+            // Incremento atómico negativo (Funciona offline)
+            batch.update(productRef, "stock", FieldValue.increment(-item.quantity))
 
-                if (product.stock < item.quantity) {
-                    throw Exception("No hay suficiente stock de ${product.name}. Disponible: ${product.stock}")
-                }
+            // Movimiento de stock (Firestore lo subirá cuando haya señal)
+            val movementRef = firestore.collection("stockMovements").document()
+            batch.set(movementRef, StockMovement(
+                id = movementRef.id,
+                productId = item.productId,
+                productName = item.productName,
+                type = StockMovementType.SALIDA,
+                quantity = item.quantity,
+                timestamp = timestamp,
+                reason = "Venta",
+                referenceId = saleId
+            ))
 
-                val stockBefore = product.stock
-                val stockAfter = stockBefore - item.quantity
+            // ACTUALIZAR ROOM (Inmediato para la App local)
+            productDao.deductStock(item.productId, item.quantity)
+        }
 
-                // Actualizar producto
-                transaction.update(productRef, "stock", stockAfter)
+        batch.set(saleRef, sale.copy(id = saleId, timestamp = timestamp))
+        items.forEach { item ->
+            val itemRef = saleItemsCollection.document()
+            batch.set(itemRef, item.copy(id = itemRef.id, saleId = saleId))
+        }
+        payment?.let { p ->
+            val paymentRef = paymentsCollection.document()
+            batch.set(paymentRef, p.copy(id = paymentRef.id, saleId = saleId, timestamp = timestamp))
+        }
 
-                // Crear movimiento de stock
-                val movementRef = firestore.collection("stockMovements").document()
-                val movement = StockMovement(
-                    id = movementRef.id,
-                    productId = item.productId,
-                    productName = item.productName,
-                    type = StockMovementType.SALIDA,
-                    quantity = item.quantity,
-                    timestamp = timestamp,
-                    reason = "Venta",
-                    stockBefore = stockBefore,
-                    stockAfter = stockAfter,
-                    referenceId = saleId
-                )
-                transaction.set(movementRef, movement)
-            }
-
-            // 3. Guardar Venta
-            transaction.set(saleRef, sale.copy(id = saleId, timestamp = timestamp))
-
-            // 4. Guardar Items de la venta
-            items.forEach { item ->
-                val itemRef = saleItemsCollection.document()
-                transaction.set(itemRef, item.copy(id = itemRef.id, saleId = saleId))
-            }
-
-            // 5. Guardar Pago inicial si existe
-            payment?.let { p ->
-                val paymentRef = paymentsCollection.document()
-                transaction.set(paymentRef, p.copy(id = paymentRef.id, saleId = saleId, timestamp = timestamp))
-            }
-
-            null // Éxito
-        }.await()
+        batch.commit()
     }
 
     suspend fun registerPayment(payment: Payment) {
         firestore.runTransaction { transaction ->
             val saleRef = salesCollection.document(payment.saleId)
             val saleDoc = transaction.get(saleRef)
-            val sale = saleDoc.toObject(Sale::class.java)
-                ?: throw Exception("Venta no encontrada")
-
+            val sale = saleDoc.toObject(Sale::class.java) ?: throw Exception("Venta no encontrada")
             val newPaidAmount = sale.paidAmount + payment.amount
             val newPendingBalance = sale.totalAmount - newPaidAmount
-            val newStatus = if (newPendingBalance <= 0.0) SaleStatus.PAGADA else SaleStatus.PARCIAL
-            
             val updatedSale = sale.copy(
                 paidAmount = newPaidAmount,
                 pendingBalance = if (newPendingBalance < 0) 0.0 else newPendingBalance,
-                status = newStatus
+                status = if (newPendingBalance <= 0.0) SaleStatus.PAGADA else SaleStatus.PARCIAL
             )
-
             val paymentRef = paymentsCollection.document()
             transaction.set(paymentRef, payment.copy(id = paymentRef.id))
             transaction.set(saleRef, updatedSale)
-            null // Return from lambda
+            null
         }.await()
     }
 
-    // Métodos para compatibilidad con ViewModels actuales que esperan flows
-    // Nota: Para no romper los ViewModels, expondremos estos flows como StateFlow si es posible,
-    // pero Firestore snapshots ya son reactivos.
-    // Los ViewModels deberán usar .collectAsStateWithLifecycle()
-    
-    // Para no romper la interfaz 'object SaleRepository', mantendremos las propiedades
-    // pero ahora vendrán de Firestore. Sin embargo, StateFlow requiere un valor inicial.
-    // Usaremos flows directamente en los ViewModels.
+    suspend fun deleteSale(saleId: String) {
+        val items = saleItemsCollection.whereEqualTo("saleId", saleId).get().await().toObjects(SaleItem::class.java)
+        val payments = paymentsCollection.whereEqualTo("saleId", saleId).get().await().toObjects(Payment::class.java)
+        val movements = firestore.collection("stockMovements").whereEqualTo("referenceId", saleId).get().await()
+
+        firestore.runTransaction { transaction ->
+            items.forEach { item ->
+                val productRef = productsCollection.document(item.productId)
+                val productDoc = transaction.get(productRef)
+                val product = productDoc.toObject(Product::class.java)
+                if (product != null) {
+                    val newStock = product.stock + item.quantity
+                    transaction.update(productRef, "stock", newStock)
+                }
+                transaction.delete(saleItemsCollection.document(item.id))
+            }
+            movements.documents.forEach { doc -> transaction.delete(doc.reference) }
+            payments.forEach { payment -> transaction.delete(paymentsCollection.document(payment.id)) }
+            transaction.delete(salesCollection.document(saleId))
+            null
+        }.await()
+    }
 }

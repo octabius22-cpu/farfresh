@@ -43,10 +43,12 @@ fun AddProductScreen(
     var volumeMl by remember { mutableStateOf("") }
     var imageUrl by remember { mutableStateOf("") }
     var controlStock by remember { mutableStateOf(true) }
+    
+    var isDataLoaded by remember { mutableStateOf(false) }
 
     // Cargar datos si estamos editando
     LaunchedEffect(productId, productsState) {
-        if (productId != null) {
+        if (productId != null && !isDataLoaded) {
             val existingProduct = productsState.find { it.id == productId }
             existingProduct?.let {
                 Log.d("AddProductScreen", "Cargando producto para editar: ${it.name}")
@@ -58,6 +60,7 @@ fun AddProductScreen(
                 stock = it.stock.toString()
                 volumeMl = it.volumeMl?.toString() ?: ""
                 imageUrl = it.imageUrl ?: ""
+                isDataLoaded = true // Evita que se vuelva a cargar y sobrescriba cambios del usuario
             }
         }
     }

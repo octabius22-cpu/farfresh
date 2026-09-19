@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.farfresh.app.data.model.*
 import com.farfresh.app.data.repository.CustomerRepository
 import com.farfresh.app.data.repository.SaleRepository
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import java.util.*
 
@@ -21,63 +22,84 @@ class SalesViewModel : ViewModel() {
     var selectedFilter by mutableStateOf(PeriodFilter.HOY)
     var searchQuery by mutableStateOf("")
 
-    val salesState: StateFlow<SalesUiState> = combine(
-        combine(
-            SaleRepository.getSales(),
-            SaleRepository.getPayments(),
-            SaleRepository.getSaleItems()
-        ) { s, p, i -> Triple(s, p, i) },
-        snapshotFlow { selectedFilter },
-        snapshotFlow { searchQuery }
-    ) { data, filter, query ->
-        val sales = data.first
-        val payments = data.second
-        val items = data.third
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val salesState: StateFlow<SalesUiState> = snapshotFlow { selectedFilter }
+        .flatMapLatest { filter ->
+            val start = getStartTimeForFilter(filter)
+            // Traemos solo lo necesario para el período
+            combine(
+                SaleRepository.getSales(limit = 200, startTime = start),
+                SaleRepository.getPayments(limit = 300),
+                SaleRepository.getSaleItems(limit = 1000),
+                snapshotFlow { searchQuery }
+            ) { sales, payments, items, query ->
+                processSalesData(sales, payments, items, query, filter)
+            }
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = SalesUiState()
+        )
 
+    private fun getStartTimeForFilter(filter: PeriodFilter): Long? {
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.HOUR_OF_DAY, 0)
+        cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0)
+        cal.set(Calendar.MILLISECOND, 0)
+
+        return when (filter) {
+            PeriodFilter.HOY -> cal.timeInMillis
+            PeriodFilter.SEMANA -> {
+                cal.set(Calendar.DAY_OF_WEEK, cal.firstDayOfWeek)
+                cal.timeInMillis
+            }
+            PeriodFilter.MES -> {
+                cal.set(Calendar.DAY_OF_MONTH, 1)
+                cal.timeInMillis
+            }
+            PeriodFilter.TODAS -> null
+        }
+    }
+
+    private fun processSalesData(
+        sales: List<Sale>,
+        payments: List<Payment>,
+        items: List<SaleItem>,
+        query: String,
+        filter: PeriodFilter
+    ): SalesUiState {
         val now = Calendar.getInstance()
         
-        val salesInPeriod = sales.filter { sale ->
+        // El filtro de Firestore ya trajo solo lo relevante para 'start',
+        // pero para Semana/Mes afinamos localmente si es necesario.
+        val salesInPeriod = if (filter == PeriodFilter.TODAS) sales 
+        else sales.filter { sale ->
             when (filter) {
                 PeriodFilter.HOY -> isSameDay(sale.timestamp, now)
                 PeriodFilter.SEMANA -> isSameWeek(sale.timestamp, now)
                 PeriodFilter.MES -> isSameMonth(sale.timestamp, now)
-                PeriodFilter.TODAS -> true
-            }
-        }
-
-        val paymentsInPeriod = payments.filter { payment ->
-            when (filter) {
-                PeriodFilter.HOY -> isSameDay(payment.timestamp, now)
-                PeriodFilter.SEMANA -> isSameWeek(payment.timestamp, now)
-                PeriodFilter.MES -> isSameMonth(payment.timestamp, now)
-                PeriodFilter.TODAS -> true
+                else -> true
             }
         }
 
         val filteredSales = salesInPeriod.filter { sale ->
             val customerName = sale.customerName ?: "Consumidor general"
-            val saleItems = items.filter { it.saleId == sale.id }
             val matchCustomer = customerName.contains(query, ignoreCase = true)
-            val matchProduct = saleItems.any { it.productName.contains(query, ignoreCase = true) }
-            
-            query.isEmpty() || matchCustomer || matchProduct
+            query.isEmpty() || matchCustomer
         }.sortedByDescending { it.timestamp }
 
-        SalesUiState(
+        return SalesUiState(
             sales = filteredSales.map { sale ->
                 val customerName = sale.customerName ?: "Consumidor general"
                 val count = items.count { it.saleId == sale.id }
                 SaleListItem(sale, customerName, count)
             },
             totalSales = salesInPeriod.sumOf { it.totalAmount },
-            totalCollected = paymentsInPeriod.sumOf { it.amount },
+            totalCollected = payments.filter { p -> salesInPeriod.any { it.id == p.saleId } }.sumOf { it.amount },
             totalPending = salesInPeriod.sumOf { it.pendingBalance }
         )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = SalesUiState()
-    )
+    }
 
     private fun isSameDay(timestamp: Long, now: Calendar): Boolean {
         val cal = Calendar.getInstance()

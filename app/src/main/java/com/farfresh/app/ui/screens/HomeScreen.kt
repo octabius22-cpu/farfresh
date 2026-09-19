@@ -10,17 +10,21 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.farfresh.app.R
 import com.farfresh.app.data.model.SaleStatus
 import com.farfresh.app.ui.components.SummaryMini
 import com.farfresh.app.ui.viewmodel.DashboardViewModel
@@ -39,16 +43,23 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val todayDate = SimpleDateFormat("EEEE, d 'de' MMMM", Locale("es", "PE")).format(Date())
+    
+    var showQrDialog by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text("Mi Tienda", fontWeight = FontWeight.Black)
+                        androidx.compose.foundation.Image(
+                            painter = painterResource(id = R.drawable.logo),
+                            contentDescription = "FarFresh Logo",
+                            modifier = Modifier.height(40.dp).padding(vertical = 4.dp),
+                            contentScale = ContentScale.Fit
+                        )
                         Text(
                             text = todayDate.replaceFirstChar { it.uppercase() },
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelSmall,
                             color = Color.White.copy(alpha = 0.8f)
                         )
                     }
@@ -58,10 +69,16 @@ fun HomeScreen(
                         Icon(Icons.Default.Menu, contentDescription = "Menú")
                     }
                 },
+                actions = {
+                    IconButton(onClick = { showQrDialog = true }) {
+                        Icon(Icons.Default.QrCode, contentDescription = "Mostrar QR")
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     titleContentColor = Color.White,
-                    navigationIconContentColor = Color.White // Asegurar visibilidad
+                    navigationIconContentColor = Color.White,
+                    actionIconContentColor = Color.White
                 )
             )
         }
@@ -70,6 +87,19 @@ fun HomeScreen(
             EmptyDashboard(padding, onNewSaleClick)
         } else {
             DashboardContent(padding, uiState, onNewSaleClick, onSeeAllPendingClick, onSaleClick)
+        }
+    }
+
+    if (showQrDialog) {
+        Dialog(onDismissRequest = { showQrDialog = false }) {
+            androidx.compose.foundation.Image(
+                painter = painterResource(id = R.drawable.yap),
+                contentDescription = "QR Yape",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight(),
+                contentScale = ContentScale.FillWidth
+            )
         }
     }
 }
